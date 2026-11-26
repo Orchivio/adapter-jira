@@ -174,16 +174,21 @@ func (s *Server) poll(ctx context.Context, c conn, keys []string, now time.Time,
 	return nil
 }
 
-// pollJQL always restricts to the stream's project keys; a connection's own
-// JQL narrows further. The cursor is epoch milliseconds, which JQL reads
+// pollJQL restricts to the stream's project keys (none: connect-time check);
+// a connection's own JQL narrows further. fetch still drops issues outside the
+// keys, because a custom JQL can widen the query. The cursor is epoch milliseconds, which JQL reads
 // independent of the technical user's time zone.
 // ponytail: a custom JQL with its own ORDER BY breaks the query; strip it if tenants need that.
 func pollJQL(custom string, keys []string, earliest time.Time) string {
-	jql := "project in (\"" + strings.Join(keys, "\",\"") + "\")"
-	if custom != "" {
-		jql += " AND (" + custom + ")"
+	var parts []string
+	if len(keys) != 0 {
+		parts = append(parts, "project in (\""+strings.Join(keys, "\",\"")+"\")")
 	}
-	return jql + " AND updated >= " + strconv.FormatInt(earliest.Truncate(time.Minute).UnixMilli(), 10) + " ORDER BY updated ASC, key ASC"
+	if custom != "" {
+		parts = append(parts, "("+custom+")")
+	}
+	parts = append(parts, "updated >= "+strconv.FormatInt(earliest.Truncate(time.Minute).UnixMilli(), 10))
+	return strings.Join(parts, " AND ") + " ORDER BY updated ASC, key ASC"
 }
 
 func (s *Server) fetch(ctx context.Context, c conn, keys []string, windows map[string]time.Time, earliest time.Time) ([]datedEvent, error) {
@@ -195,15 +200,20 @@ func (s *Server) fetch(ctx context.Context, c conn, keys []string, windows map[s
 		}
 		project, _, _ := strings.Cut(key, "-")
 		since, ok := windows[project]
-		if !ok {
+		if !ok { // outside the stream's keys, e.g. widened by a custom JQL
 			return nil
 		}
 		found, err := c.issueEvents(ctx, key, since)
-		if errors.Is(err, apiError(http.StatusNotFound)) {
+		switch {
+		case errors.Is(err, apiError(http.StatusUnauthorized)), ctx.Err() != nil:
+			return err
+		case err != nil:
+			// One broken issue must not stall the stream; its events in this window are lost.
+			slog.Warn("Jira issue skipped while polling", "site", c.base.Host, "issue", key, "error", err)
 			return nil
 		}
 		events = append(events, found...)
-		return err
+		return nil
 	})
 	return events, err
 }
@@ -353,7 +363,7 @@ func (c conn) commented(key string, cm comment) *pb.TrackerEvent {
 	}
 	var wiki string
 	_ = json.Unmarshal(cm.Body, &wiki)
-	body, err := wikiMarkup{}.ToMarkdown(cm.Body)
+	body, err := c.markup.ToMarkdown(cm.Body)
 	if err != nil || !strings.Contains(strings.ToLower(wiki), strings.ToLower(prefix+c.cred.BotName+"]")) {
 		return nil
 	}

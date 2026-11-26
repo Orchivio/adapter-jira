@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	pb "github.com/orchivio/orchestrator/contract/gen/orchivio/plugin/v1"
 	"google.golang.org/grpc/codes"
@@ -53,10 +54,11 @@ var (
 
 // conn is one tenant connection, rebuilt from the credential on every call.
 type conn struct {
-	http  *http.Client
-	base  *url.URL
-	cloud bool
-	cred  credential
+	http   *http.Client
+	markup Markup
+	base   *url.URL
+	cloud  bool
+	cred   credential
 }
 
 func (c conn) request(ctx context.Context, method, path string, query url.Values, in, out any) error {
@@ -106,7 +108,7 @@ func (s *Server) connection(pc *pb.Credential) (conn, error) {
 	if json.Unmarshal(pc.GetData(), &cred) != nil || cred.Token == "" || cred.BotID == "" {
 		return conn{}, status.Error(codes.InvalidArgument, "credential malformed")
 	}
-	c := conn{http: s.http, base: s.base, cloud: s.cloud, cred: cred}
+	c := conn{http: s.http, markup: s.markup, base: s.base, cloud: s.cloud, cred: cred}
 	if s.cloud {
 		site, ok := normalizeCloudSite(cred.Site)
 		if !ok || cred.Email == "" {
@@ -134,7 +136,7 @@ func (s *Server) CompleteConnect(ctx context.Context, req *pb.CompleteConnectReq
 			return nil, status.Errorf(codes.InvalidArgument, "field %s is required", f.GetName())
 		}
 	}
-	c := conn{http: s.http, base: s.base, cloud: s.cloud,
+	c := conn{http: s.http, markup: s.markup, base: s.base, cloud: s.cloud,
 		cred: credential{Token: strings.TrimSpace(fields["token"]), JQL: strings.TrimSpace(fields["jql"])}}
 	if s.cloud {
 		site, ok := normalizeCloudSite(fields["siteUrl"])
@@ -156,6 +158,9 @@ func (s *Server) CompleteConnect(ctx context.Context, req *pb.CompleteConnectReq
 	c.cred.BotID, c.cred.BotName = c.userID(me), c.username(me)
 	if c.cred.BotID == "" || c.cred.BotName == "" {
 		return nil, status.Error(codes.Unavailable, "Jira did not return the technical user's identity")
+	}
+	if err := c.checkJQL(ctx, s.now()); err != nil {
+		return nil, err
 	}
 	var info struct{ ServerID string }
 	if err := c.request(ctx, http.MethodGet, "/serverInfo", nil, nil, &info); err != nil {
@@ -216,4 +221,25 @@ func (s *Server) CheckAccess(ctx context.Context, req *pb.CheckAccessRequest) (*
 		}
 	}
 	return resp, nil
+}
+
+// checkJQL lets Jira parse the connection's own JQL as the poller will send
+// it; a rejection names the field, never the JQL.
+func (c conn) checkJQL(ctx context.Context, now time.Time) error {
+	if c.cred.JQL == "" {
+		return nil
+	}
+	path := "/search"
+	if c.cloud {
+		path += "/jql"
+	}
+	query := url.Values{"jql": {pollJQL(c.cred.JQL, nil, now)}, "maxResults": {"0"}}
+	err := c.request(ctx, http.MethodGet, path, query, nil, nil)
+	if errors.Is(err, apiError(http.StatusBadRequest)) {
+		return status.Error(codes.InvalidArgument, "field jql: rejected by Jira")
+	}
+	if err != nil {
+		return grpcError(err)
+	}
+	return nil
 }

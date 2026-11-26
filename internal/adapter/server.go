@@ -266,7 +266,8 @@ func (s *Server) SetStatus(ctx context.Context, req *pb.SetStatusRequest) (*pb.S
 		}
 		body := map[string]map[string]string{"transition": {"id": t.ID}}
 		err := c.request(ctx, http.MethodPost, path+"/transitions", nil, body, nil)
-		if errors.Is(err, apiError(400)) || errors.Is(err, apiError(409)) || errors.Is(err, apiError(422)) {
+		if errors.Is(err, apiError(http.StatusBadRequest)) || errors.Is(err, apiError(http.StatusConflict)) ||
+			errors.Is(err, apiError(http.StatusUnprocessableEntity)) {
 			// A concurrent change may already have reached the target.
 			if now, err := c.currentStatus(ctx, path); err == nil && strings.EqualFold(now, target) {
 				return &pb.SetStatusResponse{}, nil

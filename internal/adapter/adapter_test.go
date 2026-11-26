@@ -212,11 +212,92 @@ func TestRejectedTokenIsUnauthenticated(t *testing.T) {
 	_, postErr := s.PostComment(ctx, &pb.PostCommentRequest{TicketRef: "ABC-1", Body: "hi", Credential: cred})
 	_, statusErr := s.SetStatus(ctx, &pb.SetStatusRequest{TicketRef: "ABC-1", Status: "Done", Credential: cred})
 	_, accessErr := s.CheckAccess(ctx, &pb.CheckAccessRequest{Credentials: []*pb.Credential{cred}, Items: []string{"ABC"}})
+	streamErr := s.StreamEvents(&pb.StreamEventsRequest{ProjectKeys: []string{"ABC"}, Credential: cred}, &fakeStream{ctx: ctx})
 
-	for name, err := range map[string]error{"GetTicket": getErr, "PostComment": postErr, "SetStatus": statusErr, "CheckAccess": accessErr} {
+	for name, err := range map[string]error{"GetTicket": getErr, "PostComment": postErr, "SetStatus": statusErr, "CheckAccess": accessErr, "StreamEvents": streamErr} {
 		if status.Code(err) != codes.Unauthenticated || strings.Contains(err.Error(), fakeToken) {
 			t.Errorf("%s: %v; want Unauthenticated without token", name, err)
 		}
+	}
+}
+
+func TestForbiddenTokenIsRejectedOnConnect(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(fake.Close)
+	s := newDataCenter(t, fake.URL)
+
+	_, err := s.CompleteConnect(t.Context(), &pb.CompleteConnectRequest{Fields: map[string]string{"token": fakeToken}})
+
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "token rejected") || strings.Contains(err.Error(), fakeToken) {
+		t.Fatalf("CompleteConnect = %v; want InvalidArgument token rejected", err)
+	}
+}
+
+func TestCustomJQLCannotEscapeProjects(t *testing.T) {
+	var foreign atomic.Int32
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/rest/api/2/search":
+			fmt.Fprint(w, `{"issues":[{"key":"OTHER-1"}],"total":1}`)
+		case strings.HasPrefix(r.URL.Path, "/rest/api/2/issue/OTHER-1"):
+			foreign.Add(1)
+			fmt.Fprint(w, `{"key":"OTHER-1","changelog":{"total":0,"histories":[]},"total":0,"comments":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	s := newDataCenter(t, fake.URL)
+	c, err := s.connection(credentialOf(t, credential{Token: fakeToken, BotID: "JIRAUSER1", BotName: "orchivio-bot", JQL: "x) OR (project is not EMPTY"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []*pb.TrackerEvent
+
+	err = s.poll(t.Context(), c, []string{"ABC"}, time.Date(2026, 11, 24, 10, 15, 0, 0, time.UTC), func(e *pb.TrackerEvent) error {
+		events = append(events, e)
+		return nil
+	})
+
+	if err != nil || len(events) != 0 || foreign.Load() != 0 {
+		t.Fatalf("poll = %v, events %v, OTHER-1 requests %d; want none", err, events, foreign.Load())
+	}
+}
+
+func TestPollSkipsBrokenIssue(t *testing.T) {
+	start := time.Date(2026, 11, 24, 10, 15, 0, 0, time.UTC)
+	fresh := start.Add(time.Second).Format(time.RFC3339)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/api/2/search":
+			fmt.Fprint(w, `{"issues":[{"key":"ABC-1"},{"key":"ABC-2"}],"total":2}`)
+		case "/rest/api/2/issue/ABC-1":
+			fmt.Fprint(w, `{"key":"ABC-1","changelog":{"total":1,"histories":[{"id":"1","created":"not a time","author":{"key":"JIRAUSER9","name":"jdoe"},"items":[]}]}}`)
+		case "/rest/api/2/issue/ABC-2":
+			fmt.Fprint(w, `{"key":"ABC-2","changelog":{"total":0,"histories":[]}}`)
+		case "/rest/api/2/issue/ABC-2/comment":
+			fmt.Fprintf(w, `{"total":1,"comments":[{"id":"5","created":%q,"author":{"key":"JIRAUSER9","name":"jdoe"},"body":"[~orchivio-bot] help"}]}`, fresh)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	s := newDataCenter(t, fake.URL)
+	c, err := s.connection(dcCredential(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+
+	err = s.poll(t.Context(), c, []string{"ABC"}, start, func(e *pb.TrackerEvent) error {
+		ids = append(ids, e.GetExternalId())
+		return nil
+	})
+
+	if err != nil || !reflect.DeepEqual(ids, []string{"comment:5"}) {
+		t.Fatalf("poll = %v, events %v; want comment:5 despite broken ABC-1", err, ids)
 	}
 }
 

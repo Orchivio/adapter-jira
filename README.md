@@ -25,7 +25,7 @@ Register each process under its own name in the orchestrator's `ORCHIVIO_ADAPTER
 | `token` | required, secret (API token) | required, secret (PAT) |
 | `jql` | optional | optional |
 
-Connecting calls `GET /rest/api/2/myself` (a rejected token fails with `token rejected`, the value is never echoed) and `GET /rest/api/2/serverInfo`. The connection's `external_id` is the Data Center `serverId` or the Cloud site host; its label is `<host> (<technical user>)`. A token rejected later (HTTP 401) makes every call fail with `UNAUTHENTICATED`, and the orchestrator marks the connection `needs_reauth`.
+Connecting calls `GET /rest/api/2/myself` (a rejected token fails with `token rejected`, the value is never echoed), lets Jira parse a custom `jql` (`search` with `maxResults=0`; a rejection fails with `field jql: rejected by Jira`) and calls `GET /rest/api/2/serverInfo`. The connection's `external_id` is the Data Center `serverId` or the Cloud site host; its label is `<host> (<technical user>)`. A token rejected later (HTTP 401) makes every call fail with `UNAUTHENTICATED`, and the orchestrator marks the connection `needs_reauth`.
 
 ## Events
 
@@ -34,6 +34,7 @@ Each `StreamEvents` call polls its project keys with `project in (<keys>) [AND (
 - `ASSIGNED`: a changelog entry assigns the issue to the technical user.
 - `COMMENTED` with `mentions_bot`: a comment mentions the technical user (`[~username]` on Data Center, `[~accountid:…]` on Cloud).
 - The technical user's own comments and changes never produce events.
+- An issue that fails to load (other than HTTP 401) is logged and skipped for that poll; its events in that window are lost.
 
 Actors carry `id` (DC user key or Cloud accountId), `username` (DC username or Cloud accountId), `name` and, when Jira returns it, `email`.
 

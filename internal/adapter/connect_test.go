@@ -18,8 +18,14 @@ import (
 )
 
 func TestCapabilitiesListFormFields(t *testing.T) {
-	cloud, _ := New(Config{Deployment: "cloud", PollInterval: 1})
-	dc, _ := New(Config{Deployment: "datacenter", URL: "https://jira.example.test", PollInterval: 1})
+	cloud, err := New(Config{Deployment: "cloud", PollInterval: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc, err := New(Config{Deployment: "datacenter", URL: "https://jira.example.test", PollInterval: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
 	names := func(s *Server) []string {
 		caps, _ := s.GetCapabilities(t.Context(), &pb.GetCapabilitiesRequest{})
 		if caps.GetAdapterName() != "jira" || !caps.GetSupportsStatusUpdate() {
@@ -84,6 +90,11 @@ func TestCompleteConnectReturnsServerIdentity(t *testing.T) {
 			fmt.Fprint(w, `{"key":"JIRAUSER1","name":"orchivio-bot","displayName":"Orchivio Bot"}`)
 		case "/rest/api/2/serverInfo":
 			fmt.Fprint(w, `{"serverId":"B7AE-1234"}`)
+		case "/rest/api/2/search":
+			if q := r.URL.Query(); q.Get("maxResults") != "0" || !strings.HasPrefix(q.Get("jql"), "(labels = bot) AND updated >= ") {
+				t.Errorf("jql check = %v", q)
+			}
+			fmt.Fprint(w, `{"issues":[],"total":0}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -194,5 +205,27 @@ func TestTLSWithCustomCA(t *testing.T) {
 	ticket, err := s.GetTicket(t.Context(), &pb.GetTicketRequest{TicketRef: "ABC-1", Credential: dcCredential(t)})
 	if err != nil || ticket.GetTitle() != "Secure" {
 		t.Fatalf("GetTicket = %v, %v", ticket, err)
+	}
+}
+
+func TestCompleteConnectRejectsInvalidJQL(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/api/2/myself":
+			fmt.Fprint(w, `{"key":"JIRAUSER1","name":"orchivio-bot","displayName":"Orchivio Bot"}`)
+		case "/rest/api/2/search":
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"errorMessages":["Error in the JQL Query"]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	s := newDataCenter(t, fake.URL)
+
+	_, err := s.CompleteConnect(t.Context(), &pb.CompleteConnectRequest{Fields: map[string]string{"token": fakeToken, "jql": "secretproject = (("}})
+
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "field jql: rejected by Jira") || strings.Contains(err.Error(), "secretproject") {
+		t.Fatalf("CompleteConnect = %v; want InvalidArgument field jql", err)
 	}
 }
