@@ -91,7 +91,7 @@ func TestCompleteConnectReturnsServerIdentity(t *testing.T) {
 		case "/rest/api/2/serverInfo":
 			fmt.Fprint(w, `{"serverId":"B7AE-1234"}`)
 		case "/rest/api/2/search":
-			if q := r.URL.Query(); q.Get("maxResults") != "0" || !strings.HasPrefix(q.Get("jql"), "(labels = bot) AND updated >= ") {
+			if q := r.URL.Query(); q.Get("maxResults") != "1" || q.Get("fields") != "key" || !strings.HasPrefix(q.Get("jql"), "(labels = bot) AND updated >= ") {
 				t.Errorf("jql check = %v", q)
 			}
 			fmt.Fprint(w, `{"issues":[],"total":0}`)

@@ -25,7 +25,7 @@ Register each process under its own name in the orchestrator's `ORCHIVIO_ADAPTER
 | `token` | required, secret (API token) | required, secret (PAT) |
 | `jql` | optional | optional |
 
-Connecting calls `GET /rest/api/2/myself` (a rejected token fails with `token rejected`, the value is never echoed), lets Jira parse a custom `jql` (`search` with `maxResults=0`; a rejection fails with `field jql: rejected by Jira`) and calls `GET /rest/api/2/serverInfo`. The connection's `external_id` is the Data Center `serverId` or the Cloud site host; its label is `<host> (<technical user>)`. A token rejected later (HTTP 401) makes every call fail with `UNAUTHENTICATED`, and the orchestrator marks the connection `needs_reauth`.
+Connecting calls `GET /rest/api/2/myself` (a rejected token fails with `token rejected`, the value is never echoed), lets Jira parse a custom `jql` (`search` with `maxResults=1` and `fields=key`, since Cloud `/search/jql` may reject `maxResults=0`; a rejection fails with `field jql: rejected by Jira`) and calls `GET /rest/api/2/serverInfo`. The connection's `external_id` is the Data Center `serverId` or the Cloud site host; its label is `<host> (<technical user>)`. A token rejected later (HTTP 401) makes every call fail with `UNAUTHENTICATED`, and the orchestrator marks the connection `needs_reauth`.
 
 ## Events
 

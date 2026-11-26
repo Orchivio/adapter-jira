@@ -233,7 +233,7 @@ func (c conn) checkJQL(ctx context.Context, now time.Time) error {
 	if c.cloud {
 		path += "/jql"
 	}
-	query := url.Values{"jql": {pollJQL(c.cred.JQL, nil, now)}, "maxResults": {"0"}}
+	query := url.Values{"jql": {pollJQL(c.cred.JQL, nil, now)}, "maxResults": {"1"}, "fields": {"key"}}
 	err := c.request(ctx, http.MethodGet, path, query, nil, nil)
 	if errors.Is(err, apiError(http.StatusBadRequest)) {
 		return status.Error(codes.InvalidArgument, "field jql: rejected by Jira")
