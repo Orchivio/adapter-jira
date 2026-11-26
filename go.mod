@@ -3,7 +3,7 @@ module github.com/orchivio/adapter-jira
 go 1.26.3
 
 require (
-	github.com/orchivio/orchestrator/contract v0.3.0
+	github.com/orchivio/orchestrator/contract v0.4.0
 	google.golang.org/grpc v1.85.0
 )
 
