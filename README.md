@@ -32,7 +32,7 @@ Connecting calls `GET /rest/api/2/myself` (a rejected token fails with `token re
 Each `StreamEvents` call polls its project keys with `project in (<keys>) [AND (<jql>)] AND updated >= <cursor> ORDER BY updated ASC`. The cursor is epoch milliseconds; every poll rereads a two-minute overlap for Jira's minute-resolution dates and delayed indexing, and events are deduplicated by `external_id`. Read state is kept in memory per connection and project key and starts at the first subscription (no replay).
 
 - `ASSIGNED`: a changelog entry assigns the issue to the technical user.
-- `COMMENTED` with `mentions_bot`: a comment mentions the technical user (`[~username]` on Data Center, `[~accountid:…]` on Cloud).
+- `COMMENTED`: every comment not written by the technical user, so answers to agent questions and follow-ups arrive without a mention. `mentions_bot` is set when it mentions the technical user (`[~username]` on Data Center, `[~accountid:…]` on Cloud).
 - The technical user's own comments and changes never produce events.
 - An issue that fails to load (other than HTTP 401) is logged and skipped for that poll; its events in that window are lost.
 

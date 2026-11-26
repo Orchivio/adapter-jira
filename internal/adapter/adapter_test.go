@@ -433,6 +433,9 @@ func TestCloudPollingOverlapAndPagination(t *testing.T) {
 	if want := []string{"assign:new", "comment:late"}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("events = %v; want %v", ids, want)
 	}
+	if events[1].GetMentionsBot() { // first seen in poll 0 as a plain comment; dedup keeps that one
+		t.Fatalf("late comment = %v, want mentions_bot=false", events[1])
+	}
 	if a := events[0].GetActor(); a.GetId() != "human" || a.GetUsername() != "human" || a.GetName() != "Human" {
 		t.Fatalf("actor = %v", a)
 	}
@@ -449,9 +452,10 @@ func TestDataCenterPollMatchesBotKeyAndMention(t *testing.T) {
 			fmt.Fprintf(w, `{"key":"ABC-2","changelog":{"total":1,"histories":[
 				{"id":"7","created":%q,"author":{"key":"JIRAUSER9","name":"jdoe","displayName":"J. Doe","emailAddress":"jdoe@example.test"},"items":[{"field":"assignee","to":"JIRAUSER1"}]}]}}`, fresh)
 		case "/rest/api/2/issue/ABC-2/comment":
-			fmt.Fprintf(w, `{"total":2,"comments":[
+			fmt.Fprintf(w, `{"total":3,"comments":[
 				{"id":"8","created":%q,"author":{"key":"JIRAUSER9","name":"jdoe"},"body":"[~orchivio-bot] fix it"},
-				{"id":"9","created":%q,"author":{"key":"JIRAUSER1","name":"orchivio-bot"},"body":"[~orchivio-bot] on it"}]}`, fresh, fresh)
+				{"id":"9","created":%q,"author":{"key":"JIRAUSER1","name":"orchivio-bot"},"body":"[~orchivio-bot] on it"},
+				{"id":"10","created":%q,"author":{"key":"JIRAUSER9","name":"jdoe"},"body":"use the blue one"}]}`, fresh, fresh, fresh)
 		default:
 			http.NotFound(w, r)
 		}
@@ -467,7 +471,7 @@ func TestDataCenterPollMatchesBotKeyAndMention(t *testing.T) {
 		events = append(events, e)
 		return nil
 	})
-	if err != nil || len(events) != 2 {
+	if err != nil || len(events) != 3 {
 		t.Fatalf("poll = %v, events %v", err, events)
 	}
 	want := &pb.Actor{Id: "JIRAUSER9", Username: "jdoe", Email: "jdoe@example.test", Name: "J. Doe"}
@@ -476,5 +480,9 @@ func TestDataCenterPollMatchesBotKeyAndMention(t *testing.T) {
 	}
 	if e := events[1]; e.GetExternalId() != "comment:8" || !e.GetMentionsBot() || e.GetBody() != "@orchivio-bot fix it" {
 		t.Fatalf("comment = %v", e)
+	}
+	// R12: a comment without mention (e.g. an answer to an agent question) is emitted too.
+	if e := events[2]; e.GetExternalId() != "comment:10" || e.GetKind() != pb.TrackerEvent_COMMENTED || e.GetMentionsBot() || e.GetBody() != "use the blue one" {
+		t.Fatalf("plain comment = %v", e)
 	}
 }

@@ -350,8 +350,10 @@ func (c conn) assignment(key string, ch change) *pb.TrackerEvent {
 	return nil
 }
 
-// commented reports a comment that mentions the technical user (DC
-// [~username], Cloud [~accountid:id]), unless the technical user wrote it.
+// commented reports every comment the technical user did not write (ruling
+// R12): answers to agent questions and follow-ups carry no mention. MentionsBot
+// tells whether it mentions the technical user (DC [~username], Cloud
+// [~accountid:id]); the orchestrator decides what a plain comment means.
 func (c conn) commented(key string, cm comment) *pb.TrackerEvent {
 	actor := c.actor(cm.Author)
 	if cm.ID == "" || actor == nil || c.isBot(cm.Author) {
@@ -364,10 +366,11 @@ func (c conn) commented(key string, cm comment) *pb.TrackerEvent {
 	var wiki string
 	_ = json.Unmarshal(cm.Body, &wiki)
 	body, err := c.markup.ToMarkdown(cm.Body)
-	if err != nil || !strings.Contains(strings.ToLower(wiki), strings.ToLower(prefix+c.cred.BotName+"]")) {
+	if err != nil {
 		return nil
 	}
+	mentions := strings.Contains(strings.ToLower(wiki), strings.ToLower(prefix+c.cred.BotName+"]"))
 	project, _, _ := strings.Cut(key, "-")
 	return &pb.TrackerEvent{ExternalId: "comment:" + cm.ID, Kind: pb.TrackerEvent_COMMENTED, TicketRef: key, ProjectKey: project,
-		Actor: actor, Body: redact.String(body), MentionsBot: true}
+		Actor: actor, Body: redact.String(body), MentionsBot: mentions}
 }
